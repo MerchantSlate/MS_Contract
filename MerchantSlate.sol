@@ -1,34 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
-
-interface IERC20 {
-    function transferFrom(
-        address sender,
-        address recipient,
-        uint256 amount
-    ) external returns (bool);
-
-    function allowance(
-        address owner,
-        address spender
-    ) external view returns (uint256);
-
-    function balanceOf(address account) external view returns (uint256);
-
-    function name() external view returns (string memory);
-
-    function symbol() external view returns (string memory);
-
-    function decimals() external view returns (uint8);
-}
-
-interface SpotValue {
-    function getRate(
-        address srcToken,
-        address dstToken,
-        bool useWrappers
-    ) external view returns (uint256 weightedRate);
-}
+pragma solidity ^0.8.28;
 
 contract MerchantSlate {
     // Error Messages
@@ -68,12 +39,16 @@ contract MerchantSlate {
     }
 
     // Text strings repeated in compiled code
+    uint256 private constant ONE_ETHER = 1e18;
+    uint8 private constant DEFAULT_DECIMALS = 18;
+    uint8 private constant PERCENT_100 = 100;
+    address private constant ZERO_ADDRESS = address(0);
     string private constant NATIVE = "NATIVE";
     string private constant ERROR_TASK_IN_PROGRESS = "ERROR_TASK_IN_PROGRESS";
 
     // constants
     uint256 public constant FeeDenom = 1e3; // Fee denominator, result 0.1%
-    uint256 public constant TotalStakes = 30; // Maximum total stakes limit
+    uint256 public constant TotalStakes = 10; // Maximum total stakes limit
     uint256 public constant ProductFee = 1e15; // Fee for adding a product (0.001 ether in wei)
     uint256 public constant MerchantFee = 1e16; // Merchant signup fee (0.01 ether)
 
@@ -179,13 +154,13 @@ contract MerchantSlate {
 
     // Check if token address has a contract and if token has value
     function _validToken(address token) internal view {
-        if (token != address(0)) {
+        if (token != ZERO_ADDRESS) {
             uint256 codeSize;
             assembly {
                 codeSize := extcodesize(token)
             }
             require(
-                codeSize != 0 || _convert(token, 1e6, address(0)) > 0,
+                codeSize != 0 || _convert(token, 1e6) > 0,
                 "ERROR_INVALID_TOKEN"
             );
         }
@@ -209,7 +184,7 @@ contract MerchantSlate {
         // assign id
         newMerchantId++; // Increment Merchant Id
         merchants[msg.sender] = newMerchantId; // Store Merchant Id
-        divideFee(msg.value, address(0));
+        divideFee(MerchantFee);
         returnExcess(msg.value, MerchantFee);
         return newMerchantId; // Return Merchant Id
     }
@@ -235,7 +210,7 @@ contract MerchantSlate {
     ) internal view returns (TokenData memory) {
         // initial validation
         _validToken(tokenAddress);
-        if (tokenAddress != address(0)) {
+        if (tokenAddress != ZERO_ADDRESS) {
             IERC20 token = IERC20(tokenAddress);
             return
                 TokenData({
@@ -247,10 +222,10 @@ contract MerchantSlate {
         } else {
             return
                 TokenData({
-                    add: address(0),
+                    add: ZERO_ADDRESS,
                     name: NATIVE,
                     symbol: NATIVE,
-                    decimals: 18
+                    decimals: DEFAULT_DECIMALS
                 });
         }
     }
@@ -262,22 +237,32 @@ contract MerchantSlate {
         return _tokenData(tokenAddress);
     }
 
-    // Convert token to native value
+    // Convert token to relative value
     function _convert(
         address tokenAddress,
         uint256 amount,
         address referenceAddress
     ) internal view returns (uint256) {
-        if (tokenAddress == referenceAddress) return amount;
-        uint256 rate;
-        try
-            valueAggregator.getRate(referenceAddress, tokenAddress, true)
-        returns (uint256 response) {
-            rate = response; // Success case
-        } catch {
-            rate = 0;
+        uint256 rate = amount;
+        if (tokenAddress != referenceAddress) {
+            try
+                valueAggregator.getRate(referenceAddress, tokenAddress, true)
+            returns (uint256 response) {
+                rate = response; // Success case
+            } catch {
+                rate = 0;
+            }
+            if (rate > 0) rate = (ONE_ETHER * amount) / rate;
         }
-        return rate > 0 ? ((1e18 * amount) / rate) : 0;
+        return rate;
+    }
+
+    // Convert token to native value
+    function _convert(
+        address tokenAddress,
+        uint256 amount
+    ) internal view returns (uint256) {
+        return _convert(tokenAddress, amount, ZERO_ADDRESS);
     }
 
     // Convert token to native value
@@ -303,10 +288,10 @@ contract MerchantSlate {
         _validToken(tokenAddress);
 
         // data validation
-        bool hasCommission = commPer != 0 && commAdd != address(0);
-        bool validCommission = commAdd != address(0) &&
+        bool hasCommission = commPer != 0 && commAdd != ZERO_ADDRESS;
+        bool validCommission = commAdd != ZERO_ADDRESS &&
             commPer > 0 &&
-            commPer < 100;
+            commPer < PERCENT_100;
         _inputValid(amount > 0 && (!hasCommission || validCommission));
 
         // product Id
@@ -330,7 +315,7 @@ contract MerchantSlate {
 
         // Distribute product fee to stake holders
         if (isNewProduct) {
-            divideFee(ProductFee, address(0));
+            divideFee(ProductFee);
             returnExcess(msg.value, ProductFee);
         }
 
@@ -449,9 +434,10 @@ contract MerchantSlate {
         // Check if commission address is set
         if (
             commissionPer[productId] > 0 &&
-            commissionAdd[productId] != address(0)
+            commissionAdd[productId] != ZERO_ADDRESS
         ) {
-            uint256 commAmount = (totalAmount * commissionPer[productId]) / 100; // Calculate commission amount
+            uint256 commAmount = (totalAmount * commissionPer[productId]) /
+                PERCENT_100; // Calculate commission amount
             return (
                 commissionAdd[productId],
                 commAmount,
@@ -459,7 +445,7 @@ contract MerchantSlate {
                 feeAmount
             );
         } else {
-            return (address(0), 0, merchantPaid, feeAmount);
+            return (ZERO_ADDRESS, 0, merchantPaid, feeAmount);
         }
     }
 
@@ -467,7 +453,7 @@ contract MerchantSlate {
     function payProduct(
         uint256 productId,
         uint256 quantity
-    ) external payable progressCheck returns (uint256) {
+    ) external payable progressCheck {
         // initial validation
         _isProduct(productId);
         _inputValid(quantity > 0);
@@ -490,25 +476,21 @@ contract MerchantSlate {
             uint256 feeAmount
         ) = _payProductCalc(totalAmount, productId);
 
-        // Transfer commission if applicable
-        _tokenTransfer(commAdd, commAmount, tokenAddress);
-
-        // Transfer the remaining payment to the merchant
-        _tokenTransfer(productMerchant[productId], merchantPaid, tokenAddress);
+        // token
+        if (tokenAddress != ZERO_ADDRESS) {
+            IERC20 token = IERC20(tokenAddress);
+            _tokenTransfer(commAdd, commAmount, token);
+            _tokenTransfer(productMerchant[productId], merchantPaid, token);
+            divideFee(feeAmount, token);
+        } else {
+            _tokenTransfer(commAdd, commAmount);
+            _tokenTransfer(productMerchant[productId], merchantPaid);
+            divideFee(feeAmount);
+            returnExcess(msg.value, totalAmount);
+        }
 
         // Record the payment
-        uint256 paymentId = recordPayment(
-            productId,
-            quantity,
-            merchantPaid,
-            commAmount
-        );
-
-        // Distribute fee to stake holders
-        divideFee(feeAmount, tokenAddress);
-        if (msg.value > 0) returnExcess(msg.value, totalAmount);
-
-        return paymentId;
+        recordPayment(productId, quantity, merchantPaid, commAmount);
     }
 
     // Validate buyer has funds
@@ -517,7 +499,7 @@ contract MerchantSlate {
         address tokenAddress
     ) internal view {
         // token payment
-        if (tokenAddress != address(0)) {
+        if (tokenAddress != ZERO_ADDRESS) {
             IERC20 token = IERC20(tokenAddress);
             _fundsEnough(token.balanceOf(msg.sender) >= totalAmount);
             require(
@@ -546,21 +528,19 @@ contract MerchantSlate {
         }
     }
 
-    // Transfer token
-    function _tokenTransfer(
-        address to,
-        uint256 amount,
-        address tokenAddress
-    ) internal {
-        if (amount > 0 && to != address(0)) {
-            if (tokenAddress != address(0)) {
-                IERC20(tokenAddress).transferFrom(
-                    msg.sender, // Buyer pays the fee
-                    to, // stake holder address
-                    amount // stake holder fee stake
-                );
-            } else payable(to).transfer(amount);
-        }
+    // Transfer tokens
+    function _tokenTransfer(address to, uint256 amount, IERC20 token) internal {
+        if (amount != 0 && to != ZERO_ADDRESS)
+            token.transferFrom(
+                msg.sender, // Buyer pays the fee
+                to, // stake holder address
+                amount // stake holder fee stake
+            );
+    }
+
+    // Transfer native
+    function _tokenTransfer(address to, uint256 amount) internal {
+        if (amount != 0 && to != ZERO_ADDRESS) payable(to).transfer(amount);
     }
 
     // Record payment in contract
@@ -569,7 +549,7 @@ contract MerchantSlate {
         uint256 quantity,
         uint256 merchantPaid,
         uint256 commAmount
-    ) internal returns (uint256 payId) {
+    ) internal {
         // New payment Id
         newPayId++;
 
@@ -601,8 +581,6 @@ contract MerchantSlate {
 
         // Emit payment received event
         emit PaymentReceived(productId, quantity, buyer);
-
-        return newPayId;
     }
 
     // Get payments function for all or specific merchant
@@ -612,7 +590,7 @@ contract MerchantSlate {
         uint256 merchantId, // Optional
         address buyer // Optional
     ) external view returns (Payment[] memory, uint256 total) {
-        uint256[] memory paymentIdsList = buyer != address(0) // buyer lists
+        uint256[] memory paymentIdsList = buyer != ZERO_ADDRESS // buyer lists
             ? merchantId == 0
                 ? buyerPayments[buyer]
                 : buyerToMerchantPayments[buyer][merchantId] // general lists
@@ -635,25 +613,23 @@ contract MerchantSlate {
 
     // stake holders
 
-    // Function to calculate stake holder fee stake
-    function divideFee(uint256 totalFee, address tokenAddress) internal {
-        IERC20 token; // Token contract for payment
-        bool isToken = tokenAddress != address(0);
-
-        if (isToken) token = IERC20(tokenAddress);
-
+    // Function to calculate stake holder fee stake (token)
+    function divideFee(uint256 totalFee, IERC20 token) internal {
         for (uint256 i = 0; i < stakeHolderAddresses.length; i++) {
-            uint256 transferAmount = (totalFee *
-                stakeHolders[stakeHolderAddresses[i]]) / TotalStakes;
-            if (isToken)
-                token.transferFrom(
-                    msg.sender, // Buyer pays the fee
-                    stakeHolderAddresses[i], // stake holder address
-                    transferAmount // stake holder fee stake
-                );
-            else payable(stakeHolderAddresses[i]).transfer(transferAmount);
+            address add = stakeHolderAddresses[i];
+            uint256 amount = (totalFee * stakeHolders[add]) / TotalStakes;
+            _tokenTransfer(add, amount, token);
         }
-        totalFeesPaid += _convert(tokenAddress, totalFee, address(0));
+    }
+
+    // Function to calculate stake holder fee stake (native)
+    function divideFee(uint256 totalFee) internal {
+        for (uint256 i = 0; i < stakeHolderAddresses.length; i++) {
+            address add = stakeHolderAddresses[i];
+            uint256 amount = (totalFee * stakeHolders[add]) / TotalStakes;
+            _tokenTransfer(add, amount);
+        }
+        totalFeesPaid += totalFee;
     }
 
     // stakes offered
@@ -747,7 +723,7 @@ contract MerchantSlate {
     ) internal {
         // initial validation
         _inputValid(
-            to != address(0) &&
+            to != ZERO_ADDRESS &&
                 stakeUnits > 0 &&
                 stakeUnits <= stakeHolders[from]
         );
@@ -814,7 +790,7 @@ contract MerchantSlate {
         _valueEnough(offerValue);
 
         // Transfer value to owner
-        _tokenTransfer(stakeOfferOwners[offerId], offerValue, address(0));
+        _tokenTransfer(stakeOfferOwners[offerId], offerValue);
 
         // Transfer stake to the buyer using the helper function
         _transferStake(stakeOfferOwners[offerId], msg.sender, 1);
@@ -825,4 +801,33 @@ contract MerchantSlate {
         // Return excess if any
         returnExcess(msg.value, offerValue);
     }
+}
+
+interface IERC20 {
+    function transferFrom(
+        address sender,
+        address recipient,
+        uint256 amount
+    ) external returns (bool);
+
+    function allowance(
+        address owner,
+        address spender
+    ) external view returns (uint256);
+
+    function balanceOf(address account) external view returns (uint256);
+
+    function name() external view returns (string memory);
+
+    function symbol() external view returns (string memory);
+
+    function decimals() external view returns (uint8);
+}
+
+interface SpotValue {
+    function getRate(
+        address srcToken,
+        address dstToken,
+        bool useWrappers
+    ) external view returns (uint256 weightedRate);
 }
