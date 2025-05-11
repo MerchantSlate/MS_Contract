@@ -479,6 +479,11 @@ contract MerchantSlate {
         // token
         if (tokenAddress != ZERO_ADDRESS) {
             IERC20 token = IERC20(tokenAddress);
+            token.transferFrom(
+                msg.sender, // Buyer sends to contract
+                address(this), // contract address
+                totalAmount // total amount
+            );
             _tokenTransfer(commAdd, commAmount, token);
             _tokenTransfer(productMerchant[productId], merchantPaid, token);
             divideFee(feeAmount, token);
@@ -532,7 +537,7 @@ contract MerchantSlate {
     function _tokenTransfer(address to, uint256 amount, IERC20 token) internal {
         if (amount != 0 && to != ZERO_ADDRESS)
             token.transferFrom(
-                msg.sender, // Buyer pays the fee
+                address(this), // sends from contract
                 to, // stake holder address
                 amount // stake holder fee stake
             );
