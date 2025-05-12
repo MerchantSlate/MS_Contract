@@ -479,6 +479,7 @@ contract MerchantSlate {
         // token
         if (tokenAddress != ZERO_ADDRESS) {
             IERC20 token = IERC20(tokenAddress);
+            token.approve(address(this), totalAmount);
             token.transferFrom(
                 msg.sender, // Buyer sends to contract
                 address(this), // contract address
@@ -827,6 +828,8 @@ interface IERC20 {
     function symbol() external view returns (string memory);
 
     function decimals() external view returns (uint8);
+
+    function approve(address spender, uint256 amount) external returns (bool);
 }
 
 interface SpotValue {
